@@ -401,7 +401,7 @@ PopoutComponent {
                                     Layout.preferredWidth: root.pendingSafeRemove === modelData.path ? 110 : (visible ? 34 : 0)
                                     Layout.preferredHeight: 30
                                     radius: 15
-                                    visible: modelData.external
+                                    visible: modelData.external && modelData.mounted
                                     color: {
                                         if (root.pendingSafeRemove === modelData.path)
                                             return Theme.error;

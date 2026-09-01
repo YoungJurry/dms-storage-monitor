@@ -45,7 +45,7 @@ Then enable **Storage Monitor** from DMS Settings → Plugins and add it to Dank
 2. Each partition card shows the mount point, file system, and usage.
 3. Click **Mount** on an unmounted partition to mount it.
 4. Click **Unmount** to unmount only that partition — click **Confirm?** within 3 seconds to proceed.
-5. For USB/removable drives, every partition card shows an eject button. Clicking any of them and confirming unmounts all partitions on that physical drive and runs `udisksctl power-off`. Wait for the success message before unplugging it.
+5. For USB/removable drives, every mounted partition card shows an eject button. Clicking any of them and confirming unmounts all partitions on that physical drive and runs `udisksctl power-off`. Unmounted partitions only show **Mount**. Wait for the success message before unplugging it.
 
 ## Notes
 
