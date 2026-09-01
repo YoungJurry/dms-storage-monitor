@@ -10,12 +10,13 @@ PopoutComponent {
     id: root
 
     headerText: "Storage Monitor"
-    detailsText: root.storage.probing ? "Scanning disks…" : totalDescription()
+    detailsText: root.storage.busyAction ? root.storage.actionDescription : (root.storage.probing ? "Scanning disks…" : totalDescription())
     showCloseButton: true
 
     readonly property var storage: Services.StorageService
     property int maxContentHeight: 560
     property string pendingUnmount: ""
+    property string pendingSafeRemove: ""
     property int confirmCountdown: 0
 
     function totalDescription() {
@@ -52,11 +53,28 @@ PopoutComponent {
         return Theme.primary;
     }
 
+    function displayedPartitions() {
+        const list = root.storage.visiblePartitions;
+        return root.storage.showUnmounted ? list : list.filter(p => p.mounted);
+    }
+
+    function showsSafeRemove(partition) {
+        if (!partition.external)
+            return false;
+        const list = displayedPartitions();
+        for (let i = 0; i < list.length; i++) {
+            if (list[i].drivePath === partition.drivePath)
+                return list[i].path === partition.path;
+        }
+        return false;
+    }
+
     Component.onCompleted: storage.refresh()
 
     function handleAction(partition) {
         if (root.storage.busyAction)
             return;
+        root.pendingSafeRemove = "";
         if (partition.mounted) {
             if (root.pendingUnmount === partition.path) {
                 root.pendingUnmount = "";
@@ -69,7 +87,26 @@ PopoutComponent {
                 confirmResetTimer.restart();
             }
         } else {
+            root.pendingUnmount = "";
+            confirmResetTimer.stop();
+            root.confirmCountdown = 0;
             root.storage.mountPartition(partition);
+        }
+    }
+
+    function handleSafeRemove(partition) {
+        if (root.storage.busyAction || !partition.external)
+            return;
+        root.pendingUnmount = "";
+        if (root.pendingSafeRemove === partition.drivePath) {
+            root.pendingSafeRemove = "";
+            confirmResetTimer.stop();
+            root.confirmCountdown = 0;
+            root.storage.safelyRemoveDrive(partition);
+        } else {
+            root.pendingSafeRemove = partition.drivePath;
+            root.confirmCountdown = 3;
+            confirmResetTimer.restart();
         }
     }
 
@@ -82,6 +119,7 @@ PopoutComponent {
             if (root.confirmCountdown <= 0) {
                 confirmResetTimer.stop();
                 root.pendingUnmount = "";
+                root.pendingSafeRemove = "";
             }
         }
     }
@@ -178,6 +216,25 @@ PopoutComponent {
                     }
                 }
 
+                // Success banner
+                Rectangle {
+                    width: parent.width
+                    radius: Theme.cornerRadius
+                    color: Theme.primaryContainer
+                    visible: root.storage.lastActionMessage.length > 0
+                    implicitHeight: successText.implicitHeight + Theme.spacingM * 2
+
+                    StyledText {
+                        id: successText
+                        anchors.fill: parent
+                        anchors.margins: Theme.spacingM
+                        text: root.storage.lastActionMessage
+                        font.pixelSize: Theme.fontSizeSmall
+                        color: Theme.primary
+                        wrapMode: Text.WordWrap
+                    }
+                }
+
                 // Partitions list header + refresh
                 RowLayout {
                     width: parent.width
@@ -218,12 +275,7 @@ PopoutComponent {
 
                 // Partition cards
                 Repeater {
-                    model: {
-                        const list = root.storage.visiblePartitions;
-                        if (!root.storage.showUnmounted)
-                            return list.filter(p => p.mounted);
-                        return list;
-                    }
+                    model: root.displayedPartitions()
                     delegate: Rectangle {
                         width: parent.width
                         radius: Theme.cornerRadius
@@ -355,6 +407,45 @@ PopoutComponent {
                                         onClicked: root.handleAction(modelData)
                                     }
                                 }
+
+                                Rectangle {
+                                    Layout.preferredWidth: root.pendingSafeRemove === modelData.drivePath ? 96 : (visible ? 34 : 0)
+                                    Layout.preferredHeight: 30
+                                    radius: 15
+                                    visible: root.showsSafeRemove(modelData)
+                                    color: {
+                                        if (root.pendingSafeRemove === modelData.drivePath)
+                                            return Theme.error;
+                                        return safeRemoveMouse.containsMouse ? Theme.errorHover : Theme.surfaceContainerHigh;
+                                    }
+                                    Behavior on Layout.preferredWidth { NumberAnimation { duration: 120 } }
+
+                                    DankIcon {
+                                        anchors.centerIn: parent
+                                        visible: root.pendingSafeRemove !== modelData.drivePath
+                                        name: "eject"
+                                        size: 17
+                                        color: safeRemoveMouse.containsMouse ? Theme.error : Theme.surfaceVariantText
+                                    }
+
+                                    StyledText {
+                                        anchors.centerIn: parent
+                                        visible: root.pendingSafeRemove === modelData.drivePath
+                                        text: "Remove? " + root.confirmCountdown
+                                        font.pixelSize: Theme.fontSizeSmall
+                                        font.weight: Font.Bold
+                                        color: Theme.errorText
+                                    }
+
+                                    MouseArea {
+                                        id: safeRemoveMouse
+                                        anchors.fill: parent
+                                        enabled: !root.storage.busyAction
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: root.handleSafeRemove(modelData)
+                                    }
+                                }
                             }
 
                             // Progress bar
@@ -400,7 +491,7 @@ PopoutComponent {
 
                     StyledText {
                         anchors.fill: parent
-                        text: "Mount / unmount requires system authorization (udisks2)"
+                        text: "Eject safely unmounts all partitions and powers off external drives"
                         font.pixelSize: 10
                         color: Theme.surfaceVariantText
                         horizontalAlignment: Text.AlignHCenter

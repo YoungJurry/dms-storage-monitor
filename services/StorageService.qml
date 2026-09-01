@@ -12,9 +12,16 @@ Singleton {
     // Runtime state
     property bool probing: false
     property bool busyAction: false
+    property string currentAction: ""
+    property string actionDescription: ""
     property string lastError: ""
     property string lastActionMessage: ""
     property string lastActionLog: ""
+
+    property var _actionQueue: []
+    property int _actionIndex: 0
+    property bool _actionTimedOut: false
+    property bool _probeFailed: false
 
     // Probed data
     property var partitions: [] // [{name, path, size, used, avail, usePercent, fstype, mountpoint, label, mounted}]
@@ -51,7 +58,7 @@ Singleton {
         return systemPartitionLabels.indexOf(label) >= 0;
     }
 
-    property var _dfData: ({}) // path -> {used, avail, capacity}
+    property var _dfData: ({}) // device or mountpoint -> {used, avail, capacity}
 
     Timer {
         id: refreshTimer
@@ -63,12 +70,14 @@ Singleton {
 
     Component.onCompleted: refresh()
 
-    function refresh() {
-        if (lsblkProc.running || dfProc.running)
+    function refresh(preserveError) {
+        if (busyAction || lsblkProc.running || dfProc.running)
             return;
         probing = true;
-        lastError = "";
+        if (!preserveError)
+            lastError = "";
         _dfData = ({});
+        _probeFailed = false;
         lsblkProc.running = true;
         dfProc.running = true;
     }
@@ -85,14 +94,85 @@ Singleton {
         _beginAction("unmount", partition.path);
     }
 
+    function safelyRemoveDrive(partition) {
+        if (busyAction || !partition || !partition.external || !partition.drivePath || partition.drivePath === "/dev/")
+            return;
+
+        const commands = [];
+        const seen = ({});
+        for (let i = 0; i < root.partitions.length; i++) {
+            const candidate = root.partitions[i];
+            if (candidate.drivePath !== partition.drivePath || !candidate.mounted || seen[candidate.path])
+                continue;
+            seen[candidate.path] = true;
+            commands.push({
+                command: ["udisksctl", "unmount", "-b", candidate.path],
+                description: "Unmounting " + candidate.name + "…"
+            });
+        }
+        commands.push({
+            command: ["udisksctl", "power-off", "-b", partition.drivePath],
+            description: "Powering off " + partition.driveName + "…"
+        });
+        _beginActionSequence("safe-remove", commands);
+    }
+
     function _beginAction(verb, path) {
+        const description = verb === "mount" ? "Mounting " + path + "…" : "Unmounting " + path + "…";
+        _beginActionSequence(verb, [{
+            command: ["udisksctl", verb, "-b", path],
+            description: description
+        }]);
+    }
+
+    function _beginActionSequence(kind, commands) {
+        if (busyAction || !commands || commands.length === 0)
+            return;
         busyAction = true;
+        currentAction = kind;
+        actionDescription = "";
+        lastError = "";
         lastActionMessage = "";
         lastActionLog = "";
-        actionProc.command = ["udisksctl", verb, "-b", path];
-        actionWatchdog.interval = 20000;
+        _actionQueue = commands;
+        _actionIndex = 0;
+        _actionTimedOut = false;
+        _runNextAction();
+    }
+
+    function _runNextAction() {
+        if (_actionIndex >= _actionQueue.length) {
+            const completedAction = currentAction;
+            busyAction = false;
+            currentAction = "";
+            actionDescription = "";
+            _actionQueue = [];
+            lastActionMessage = completedAction === "safe-remove"
+                ? "Drive safely powered off — you can unplug it now."
+                : (completedAction === "mount" ? "Partition mounted." : "Partition unmounted. The drive is still powered.");
+            ToastService.showInfo("Storage Monitor", lastActionMessage);
+            refresh();
+            return;
+        }
+
+        const step = _actionQueue[_actionIndex];
+        actionDescription = step.description;
+        actionProc.command = step.command;
         actionWatchdog.restart();
         actionProc.running = true;
+    }
+
+    function _failAction(message) {
+        const failedStep = actionDescription;
+        actionWatchdog.stop();
+        forceKillTimer.stop();
+        busyAction = false;
+        currentAction = "";
+        actionDescription = "";
+        _actionQueue = [];
+        lastError = (failedStep ? failedStep.replace("…", "") + ": " : "") + (message || "Storage operation failed.");
+        ToastService.showError("Storage Monitor", lastError);
+        refresh(true);
     }
 
     function formatBytes(bytes) {
@@ -127,14 +207,15 @@ Singleton {
 
     Process {
         id: lsblkProc
-        command: ["env", "LC_ALL=C", "lsblk", "-J", "-b", "-o", "NAME,KNAME,TYPE,SIZE,FSTYPE,MOUNTPOINT,LABEL,PARTTYPENAME"]
+        command: ["env", "LC_ALL=C", "lsblk", "-J", "-b", "-o", "NAME,KNAME,TYPE,SIZE,FSTYPE,MOUNTPOINT,MOUNTPOINTS,LABEL,PARTTYPENAME,PKNAME,TRAN,RM,HOTPLUG"]
         running: false
         stdout: StdioCollector {}
         stderr: StdioCollector {}
         onExited: (exitCode, exitStatus) => {
             if (exitCode !== 0) {
                 root.lastError = "lsblk failed: " + stderr.text.trim();
-                root.probing = false;
+                root._probeFailed = true;
+                root._finishIfDone();
                 return;
             }
             let parsed = null;
@@ -142,13 +223,14 @@ Singleton {
                 parsed = JSON.parse(stdout.text);
             } catch (e) {
                 root.lastError = "Could not parse lsblk output.";
-                root.probing = false;
+                root._probeFailed = true;
+                root._finishIfDone();
                 return;
             }
             const result = [];
             const devices = parsed.blockdevices || [];
             for (let i = 0; i < devices.length; i++)
-                collectPartitions(devices[i], result);
+                collectPartitions(devices[i], result, null);
             root.partitions = result;
             root._finishIfDone();
         }
@@ -170,7 +252,9 @@ Singleton {
                 const used = parseInt(parts[2], 10);
                 const avail = parseInt(parts[3], 10);
                 const capacity = parseInt(parts[4].replace("%", ""), 10);
-                root._dfData[path] = { used: used, avail: avail, capacity: capacity };
+                const info = { used: used, avail: avail, capacity: capacity };
+                root._dfData[path] = info;
+                root._dfData[parts.slice(5).join(" ")] = info;
             }
             root._finishIfDone();
         }
@@ -180,51 +264,92 @@ Singleton {
         if (lsblkProc.running || dfProc.running)
             return;
         probing = false;
+        if (_probeFailed)
+            return;
         const merged = [];
         for (let i = 0; i < partitions.length; i++) {
             const p = partitions[i];
-            const info = _dfData["/dev/" + p.name] || _dfData[p.name];
+            const info = _dfData[p.path] || _dfData["/dev/" + p.name] || _dfData[p.name] || _dfData[p.mountpoint];
+            p.mounted = !!p.mountpoint;
             if (info) {
                 p.used = info.used;
                 p.avail = info.avail;
                 p.usePercent = info.capacity;
-                p.mounted = true;
             } else {
                 p.used = 0;
-                p.avail = p.size;
+                p.avail = p.mounted ? 0 : p.size;
                 p.usePercent = 0;
-                p.mounted = false;
             }
             merged.push(p);
         }
         root.partitions = merged;
     }
 
-    function collectPartitions(device, result) {
+    function collectPartitions(device, result, parentDrive) {
         if (!device)
             return;
         const type = device.type || "";
         const fstype = device.fstype || "";
-        if (type === "part" || (type === "disk" && fstype && fstype !== "swap")) {
-            if (fstype && fstype !== "swap") {
-                result.push({
-                    name: device.name || device.kname || "",
-                    path: "/dev/" + (device.kname || device.name),
-                    size: Number(device.size || 0),
-                    fstype: fstype,
-                    partTypeName: device.parttypename || "",
-                    mountpoint: device.mountpoint || "",
-                    label: device.label || "",
-                    mounted: !!device.mountpoint,
-                    used: 0,
-                    avail: 0,
-                    usePercent: 0
-                });
+        let drive = parentDrive;
+        if (type === "disk") {
+            const driveName = device.kname || device.name || "";
+            drive = {
+                name: driveName,
+                path: "/dev/" + driveName,
+                transport: device.tran || "",
+                removable: !!device.rm,
+                hotplug: !!device.hotplug
+            };
+        }
+        if (!drive) {
+            const fallbackName = device.pkname || device.kname || device.name || "";
+            drive = {
+                name: fallbackName,
+                path: "/dev/" + fallbackName,
+                transport: device.tran || "",
+                removable: !!device.rm,
+                hotplug: !!device.hotplug
+            };
+        }
+
+        if ((type === "part" || (type === "disk" && fstype && fstype !== "swap")) && fstype && fstype !== "swap") {
+            const mountpoints = device.mountpoints || [];
+            let mountpoint = device.mountpoint || "";
+            if (!mountpoint) {
+                for (let i = 0; i < mountpoints.length; i++) {
+                    if (mountpoints[i]) {
+                        mountpoint = mountpoints[i];
+                        break;
+                    }
+                }
             }
+            const transport = (device.tran || drive.transport || "").toLowerCase();
+            const removable = !!device.rm || drive.removable;
+            const hotplug = !!device.hotplug || drive.hotplug;
+            const external = transport === "usb"
+                || ((transport !== "sata" && transport !== "ata" && transport !== "nvme") && removable && hotplug);
+            result.push({
+                name: device.name || device.kname || "",
+                path: "/dev/" + (device.kname || device.name),
+                driveName: drive.name,
+                drivePath: drive.path,
+                transport: transport,
+                external: external,
+                size: Number(device.size || 0),
+                fstype: fstype,
+                partTypeName: device.parttypename || "",
+                mountpoint: mountpoint,
+                mountpoints: mountpoints,
+                label: device.label || "",
+                mounted: !!mountpoint,
+                used: 0,
+                avail: 0,
+                usePercent: 0
+            });
         }
         const children = device.children || [];
         for (let i = 0; i < children.length; i++)
-            collectPartitions(children[i], result);
+            collectPartitions(children[i], result, drive);
     }
 
     Process {
@@ -234,28 +359,40 @@ Singleton {
         stderr: StdioCollector {}
         onExited: (exitCode, exitStatus) => {
             actionWatchdog.stop();
-            root.busyAction = false;
-            root.lastActionLog = (stdout.text + " " + stderr.text).trim();
-            if (exitCode === 0) {
-                root.lastActionMessage = "OK";
-                root.refresh();
+            forceKillTimer.stop();
+            root.lastActionLog = (root.lastActionLog + "\n" + stdout.text + " " + stderr.text).trim();
+            if (root._actionTimedOut) {
+                root._actionTimedOut = false;
+                root._failAction("Storage operation timed out. Check the authorization prompt and try again.");
+            } else if (exitCode === 0) {
+                root._actionIndex += 1;
+                root._runNextAction();
             } else {
-                root.lastError = stderr.text.trim() || "Storage operation failed.";
-                ToastService.showError("Storage Monitor", root.lastError);
+                root._failAction(stderr.text.trim() || "Storage operation failed.");
             }
         }
     }
 
     Timer {
         id: actionWatchdog
-        interval: 20000
+        interval: 60000
         repeat: false
         onTriggered: {
-            if (!root.busyAction)
+            if (!root.busyAction || !actionProc.running)
                 return;
-            root.busyAction = false;
-            root.lastError = "Storage operation timed out (udisks2 did not respond). Check the authorization prompt.";
-            ToastService.showError("Storage Monitor", root.lastError);
+            root._actionTimedOut = true;
+            actionProc.running = false;
+            forceKillTimer.restart();
+        }
+    }
+
+    Timer {
+        id: forceKillTimer
+        interval: 3000
+        repeat: false
+        onTriggered: {
+            if (actionProc.running)
+                actionProc.signal(9);
         }
     }
 }

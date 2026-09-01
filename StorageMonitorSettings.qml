@@ -20,7 +20,7 @@ PluginSettings {
 
     StyledText {
         width: parent.width
-        text: "Monitor mounted storage partitions with usage bars. Mount and unmount internal and removable drives through udisks2 — a system authorization prompt appears when required."
+        text: "Monitor storage usage, mount or unmount partitions, and safely power off removable drives through udisks2. A system authorization prompt appears when required."
         font.pixelSize: Theme.fontSizeSmall
         color: Theme.surfaceVariantText
         wrapMode: Text.WordWrap
