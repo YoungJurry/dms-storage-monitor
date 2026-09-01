@@ -398,7 +398,6 @@ PopoutComponent {
                                 }
 
                                 Rectangle {
-                                    id: safeRemoveButton
                                     Layout.preferredWidth: root.pendingSafeRemove === modelData.path ? 110 : (visible ? 34 : 0)
                                     Layout.preferredHeight: 30
                                     radius: 15
@@ -434,12 +433,6 @@ PopoutComponent {
                                         hoverEnabled: true
                                         cursorShape: Qt.PointingHandCursor
                                         onClicked: root.handleSafeRemove(modelData)
-                                        onEntered: safeRemoveTooltip.show("Safely remove " + modelData.drivePath + " (all partitions)", safeRemoveButton, 0, 0, "left")
-                                        onExited: safeRemoveTooltip.hide()
-                                    }
-
-                                    DankTooltipV2 {
-                                        id: safeRemoveTooltip
                                     }
                                 }
                             }
