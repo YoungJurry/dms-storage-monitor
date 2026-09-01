@@ -133,6 +133,7 @@ Singleton {
         actionDescription = "";
         lastError = "";
         lastActionMessage = "";
+        actionMessageTimer.stop();
         lastActionLog = "";
         _actionQueue = commands;
         _actionIndex = 0;
@@ -151,6 +152,7 @@ Singleton {
                 ? "Drive safely powered off — you can unplug it now."
                 : (completedAction === "mount" ? "Partition mounted." : "Partition unmounted. The drive is still powered.");
             ToastService.showInfo("Storage Monitor", lastActionMessage);
+            actionMessageTimer.restart();
             refresh();
             return;
         }
@@ -371,6 +373,13 @@ Singleton {
                 root._failAction(stderr.text.trim() || "Storage operation failed.");
             }
         }
+    }
+
+    Timer {
+        id: actionMessageTimer
+        interval: 6000
+        repeat: false
+        onTriggered: root.lastActionMessage = ""
     }
 
     Timer {

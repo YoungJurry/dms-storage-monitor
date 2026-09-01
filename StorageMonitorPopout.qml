@@ -58,17 +58,6 @@ PopoutComponent {
         return root.storage.showUnmounted ? list : list.filter(p => p.mounted);
     }
 
-    function showsSafeRemove(partition) {
-        if (!partition.external)
-            return false;
-        const list = displayedPartitions();
-        for (let i = 0; i < list.length; i++) {
-            if (list[i].drivePath === partition.drivePath)
-                return list[i].path === partition.path;
-        }
-        return false;
-    }
-
     Component.onCompleted: storage.refresh()
 
     function handleAction(partition) {
@@ -98,13 +87,13 @@ PopoutComponent {
         if (root.storage.busyAction || !partition.external)
             return;
         root.pendingUnmount = "";
-        if (root.pendingSafeRemove === partition.drivePath) {
+        if (root.pendingSafeRemove === partition.path) {
             root.pendingSafeRemove = "";
             confirmResetTimer.stop();
             root.confirmCountdown = 0;
             root.storage.safelyRemoveDrive(partition);
         } else {
-            root.pendingSafeRemove = partition.drivePath;
+            root.pendingSafeRemove = partition.path;
             root.confirmCountdown = 3;
             confirmResetTimer.restart();
         }
@@ -409,29 +398,30 @@ PopoutComponent {
                                 }
 
                                 Rectangle {
-                                    Layout.preferredWidth: root.pendingSafeRemove === modelData.drivePath ? 96 : (visible ? 34 : 0)
+                                    id: safeRemoveButton
+                                    Layout.preferredWidth: root.pendingSafeRemove === modelData.path ? 110 : (visible ? 34 : 0)
                                     Layout.preferredHeight: 30
                                     radius: 15
-                                    visible: root.showsSafeRemove(modelData)
+                                    visible: modelData.external
                                     color: {
-                                        if (root.pendingSafeRemove === modelData.drivePath)
+                                        if (root.pendingSafeRemove === modelData.path)
                                             return Theme.error;
-                                        return safeRemoveMouse.containsMouse ? Theme.errorHover : Theme.surfaceContainerHigh;
+                                        return safeRemoveMouse.enabled && safeRemoveMouse.containsMouse ? Theme.errorHover : Theme.surfaceContainerHigh;
                                     }
                                     Behavior on Layout.preferredWidth { NumberAnimation { duration: 120 } }
 
                                     DankIcon {
                                         anchors.centerIn: parent
-                                        visible: root.pendingSafeRemove !== modelData.drivePath
+                                        visible: root.pendingSafeRemove !== modelData.path
                                         name: "eject"
                                         size: 17
-                                        color: safeRemoveMouse.containsMouse ? Theme.error : Theme.surfaceVariantText
+                                        color: safeRemoveMouse.enabled && safeRemoveMouse.containsMouse ? Theme.error : Theme.surfaceVariantText
                                     }
 
                                     StyledText {
                                         anchors.centerIn: parent
-                                        visible: root.pendingSafeRemove === modelData.drivePath
-                                        text: "Remove? " + root.confirmCountdown
+                                        visible: root.pendingSafeRemove === modelData.path
+                                        text: "Remove disk? " + root.confirmCountdown
                                         font.pixelSize: Theme.fontSizeSmall
                                         font.weight: Font.Bold
                                         color: Theme.errorText
@@ -444,6 +434,12 @@ PopoutComponent {
                                         hoverEnabled: true
                                         cursorShape: Qt.PointingHandCursor
                                         onClicked: root.handleSafeRemove(modelData)
+                                        onEntered: safeRemoveTooltip.show("Safely remove " + modelData.drivePath + " (all partitions)", safeRemoveButton, 0, 0, "left")
+                                        onExited: safeRemoveTooltip.hide()
+                                    }
+
+                                    DankTooltipV2 {
+                                        id: safeRemoveTooltip
                                     }
                                 }
                             }

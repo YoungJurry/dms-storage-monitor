@@ -45,12 +45,12 @@ Then enable **Storage Monitor** from DMS Settings → Plugins and add it to Dank
 2. Each partition card shows the mount point, file system, and usage.
 3. Click **Mount** on an unmounted partition to mount it.
 4. Click **Unmount** to unmount only that partition — click **Confirm?** within 3 seconds to proceed.
-5. For USB/removable drives, click the eject button and confirm to unmount all partitions on the physical drive and run `udisksctl power-off`. Wait for the success message before unplugging it.
+5. For USB/removable drives, every partition card shows an eject button. Clicking any of them and confirming unmounts all partitions on that physical drive and runs `udisksctl power-off`. Wait for the success message before unplugging it.
 
 ## Notes
 
 - Storage actions use `udisksctl`, which shows a standard system authorization prompt through polkit.
-- **Unmount** detaches a filesystem but may leave a mechanical drive spinning. The eject button performs safe removal and tells you when the drive can be unplugged.
+- **Unmount** detaches a filesystem but may leave a mechanical drive spinning. The eject button performs safe removal and tells you when the drive can be unplugged. This success message automatically disappears after six seconds.
 - Some file systems (e.g. NTFS) may need extra packages (`ntfs-3g`) for write access.
 - Swap, loop, and virtual file systems (tmpfs/overlay) are hidden.
 
